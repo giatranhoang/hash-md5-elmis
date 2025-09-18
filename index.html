@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Excel MD5 Hasher (Local Browser App)</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; background:#fafafa; }
+  .card { max-width: 800px; margin: auto; padding: 20px; border-radius: 12px; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.1);}
+  h2 { margin-top:0; }
+  .row { display:flex; align-items:center; gap:12px; margin:12px 0; flex-wrap:wrap;}
+  input[type="text"] { padding:6px 10px; border:1px solid #ccc; border-radius:6px; }
+  input[type="file"] { padding:4px 0; }
+  button { padding:10px 18px; border:0; border-radius:8px; cursor:pointer; background:#0d6efd; color:#fff; font-weight:600; }
+  .status { margin-top:10px; font-size:0.95em; color:#555; white-space:pre-wrap; }
+  .ok { color:#0a7a2f; font-weight:600;}
+  .err { color:#b00020; white-space:pre-wrap;}
+  table, th, td {border: 1px solid #ccc; border-collapse: collapse;}
+  th, td {padding: 6px 12px;}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>CÔNG CỤ HỖ TRỢ MÃ HÓA MD5</h2>
+  <p>Công cụ mã hóa cột thông tin <code>SO_SO_BHXH</code> nhằm đảm bảo an toàn thông tin mã số sổ BHXH cho việc đối chiếu rà soát dữ liệu với hệ thống eLMIS. Ứng dụng chạy ngoại tuyến trên trình duyệt.</p>
+
+  <div class="row">
+    <label>Chọn file Excel theo mẫu bên dưới:</label>
+    <input id="file" type="file" accept=".xlsx" />
+  </div>
+
+  <div class="row">
+    <table>
+      <tr>
+        <th>MA_CSKCB</th>
+        <th>SO_SO_BHXH</th>
+        <th>MA_CHI_TIEU</th>
+      </tr>
+      <tr>
+        <td>12345</td>
+        <td>0123456789</td>
+        <td>G01</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="row">
+    <small>MA_CSKCB: là mã số khám chữa bệnh của cơ sở</small>
+    <small>SO_SO_BHXH: là 10 ký tự cuối của mã số sổ BHXH của người bệnh</small>
+    <small>MA_CHI_TIEU: là mã chỉ số tính toán trên eLMIS</small>
+    <small>G01. Số bệnh nhân bắt đầu điều trị lần đầu, G26. Số BN hiện đang ĐT ARV tính đến cuối kỳ BC (đang có thuốc và tạm hết thuốc trong 28 ngày)</small>
+  </div>
+
+  <div class="row">
+    <label>Kỳ thống kê (KY_TK):</label>
+    <input id="kytk" type="text" value="20252" />
+    <small>Ví dụ Quý 2 - 2025: nhập 20252; Tháng 04-2025 nhập 202504</small>
+  </div>
+
+  <div class="row">
+    <button id="run" type="button">Xử lý và Tải về</button>
+  </div>
+
+  <div id="status" class="status"></div>
+</div>
+
+<!-- Local libraries (must be in the same folder as index.html) -->
+<script src="./xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js"></script>
+
+<script>
+(function () {
+  const fileEl   = document.getElementById("file");
+  const kyTkEl   = document.getElementById("kytk");
+  const runBtn   = document.getElementById("run");
+  const statusEl = document.getElementById("status");
+
+  runBtn.addEventListener("click", async () => {
+    statusEl.textContent = ""; statusEl.className = 'status';
+
+    if (typeof XLSX === "undefined") {
+      statusEl.className = "err"; statusEl.textContent = "❌ Thư viện XLSX không tìm thấy.";
+      return;
+    }
+    if (typeof md5 === "undefined") {
+      statusEl.className = "err"; statusEl.textContent = "❌ Thư viện MD5 không tìm thấy.";
+      return;
+    }
+
+    const f = fileEl.files && fileEl.files[0];
+    if (!f) { statusEl.className="err"; statusEl.textContent="❌ Vui lòng chọn file đúng định dạng .xlsx."; return; }
+
+    const kyTk = kyTkEl.value || "20252";
+
+    try {
+      statusEl.textContent="Reading file...";
+      const data = await f.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const wsName = wb.SheetNames[0];
+      const ws = wb.Sheets[wsName];
+
+      // raw:false ensures Excel formatted text (keeps leading zeros)
+      let rows = XLSX.utils.sheet_to_json(ws, { defval:"", raw:false });
+      if (!rows.length) throw new Error("Bảng tính rỗng.");
+      if (!Object.prototype.hasOwnProperty.call(rows[0], "SO_SO_BHXH"))
+        throw new Error("Thiếu cột 'SO_SO_BHXH'.");
+
+      statusEl.textContent="Hashing rows...";
+      rows = rows.map(r => {
+        const raw = (r["SO_SO_BHXH"] ?? "").toString().trim();
+        r["SO_SO_BHXH"] = raw ? md5(raw) : "";
+        r["NGAY_DAY"] = "";
+        r["KY_TK"] = kyTk;
+        return r;
+      });
+
+      statusEl.textContent="Writing new Excel...";
+      const outWs = XLSX.utils.json_to_sheet(rows, { skipHeader:false });
+      const outWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(outWb, outWs, wsName || "Sheet1");
+
+      const outName = f.name.replace(/\.xlsx$/i,"") + "_hased.xlsx";
+      const outBuf = XLSX.write(outWb, { bookType:"xlsx", type:"array" });
+      const url = URL.createObjectURL(new Blob([outBuf], { type:"application/octet-stream" }));
+
+      const a = document.createElement("a");
+      a.href = url; a.download = outName;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+
+      statusEl.className="ok"; statusEl.textContent="✅ Chuyển đổi xong! Lưu file: " + outName;
+    } catch(e) {
+      statusEl.className="err"; statusEl.textContent="❌ Lỗi: " + (e.message || e);
+    }
+  });
+})();
+</script>
+</body>
+</html>
